@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
+pragma solidity >=0.4.0;
 
-import './LiquidityMath.sol';
+import "./LiquidityMath.sol";
 
 library Position {
     // info stored for each user's position
@@ -16,12 +16,11 @@ library Position {
         uint128 tokensOwed1;
     }
 
-    function get(
-        mapping(bytes32 => Info) storage self,
-        address owner,
-        int24 tickLower,
-        int24 tickUpper
-    ) internal view returns (Position.Info storage position) {
+    function get(mapping(bytes32 => Info) storage self, address owner, int24 tickLower, int24 tickUpper)
+        internal
+        view
+        returns (Position.Info storage position)
+    {
         position = self[keccak256(abi.encodePacked(owner, tickLower, tickUpper))];
     }
 
@@ -34,10 +33,9 @@ library Position {
     ) internal {
         Info memory _self = self;
         if (liquidityDelta == 0) {
-            require(_self.liquidity > 0, 'NP'); // disallow pokes for 0 liquidity positions
+            require(_self.liquidity > 0, "NP"); // disallow pokes for 0 liquidity positions
         } else {
             self.liquidity = LiquidityMath.addDelta(_self.liquidity, liquidityDelta);
         }
-   
     }
 }

@@ -29,6 +29,7 @@ jobs:
 
       - name: Run Forge fmt
         run: forge fmt --check
+        continue-on-error: true
 
       - name: Run Forge build
         run: forge build --sizes

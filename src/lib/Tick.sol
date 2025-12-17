@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
+pragma solidity >=0.4.0;
 
-import './LowGasSafeMath.sol';
-import './SafeCast.sol';
+import "./LowGasSafeMath.sol";
+import "./SafeCast.sol";
 
 import "./TickMath.sol";
-import './LiquidityMath.sol';
+import "./LiquidityMath.sol";
 
 // 价格轴上的一个边界点为 Tick
 library Tick {
@@ -36,8 +36,8 @@ library Tick {
 
         uint128 liquidityGrossBefore = info.liquidityGross;
         uint128 liquidityGrossAfter = LiquidityMath.addDelta(liquidityGrossBefore, liquidityDelta);
-        
-        require(liquidityGrossAfter <= maxLiquidity, 'Liquidity > max');
+
+        require(liquidityGrossAfter <= maxLiquidity, "Liquidity > max");
 
         flipped = (liquidityGrossAfter == 0) != (liquidityGrossBefore == 0);
         if (liquidityGrossBefore == 0) {

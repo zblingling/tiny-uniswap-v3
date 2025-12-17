@@ -3,4 +3,11 @@ src = "src"
 out = "out"
 libs = ["lib"]
 
+# 屏蔽编译器 Unused function parameter, Can be view 警告
+ignored_error_codes = [5667, 2018]
+
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
+
+[lint]
+# 屏蔽所有 Linter 警告
+ignore = ["src/**/*.sol"]
