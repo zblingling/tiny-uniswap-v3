@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
+import './LowGasSafeMath.sol';
+import './SafeCast.sol';
+
 import "./TickMath.sol";
 import './LiquidityMath.sol';
 
 // 价格轴上的一个边界点为 Tick
 library Tick {
+    using LowGasSafeMath for int256;
+    using SafeCast for int256;
 
     struct Info {
         // 所有以这个点作为边界（上/下界）的头寸流动性总和

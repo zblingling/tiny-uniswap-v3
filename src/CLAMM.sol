@@ -108,7 +108,7 @@ contract CLAMM {
                     false,
                     maxLiquidityPerTick
                 );
-                flippedUpper = ticks.update{
+                flippedUpper = ticks.update(
                     tickUpper,
                     tick,
                     liquidityDelta,
@@ -116,7 +116,7 @@ contract CLAMM {
                     _feeGrowthGlobal1X128,
                     true,
                     maxLiquidityPerTick
-                };
+                );
             }
 
             position.update(liquidityDelta, 0, 0);

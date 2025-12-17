@@ -35,7 +35,7 @@ library Position {
         Info memory _self = self;
         if (liquidityDelta == 0) {
             require(_self.liquidity > 0, 'NP'); // disallow pokes for 0 liquidity positions
-        } else (liquidityDelta != 0) {
+        } else {
             self.liquidity = LiquidityMath.addDelta(_self.liquidity, liquidityDelta);
         }
    
