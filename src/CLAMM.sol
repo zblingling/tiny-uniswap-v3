@@ -175,7 +175,27 @@ contract CLAMM {
         }
     }
 
-    function collect() external {}
+    function collect(
+        address recipient,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 amount0Requested,
+        uint128 amount1Requested
+    ) external lock returns (uint128 amount0, uint128 amount1){
+        Position.Info storage position = positions.get(msg.sender, tickLower, tickUpper);
+
+        amount0 = amount0Requested > position.tokensOwed0 ? position.tokensOwed0 : amount0Requested;
+        amount1 = amount1Requested > position.tokensOwed1 ? position.tokensOwed1 : amount1Requested;
+
+        if (amount0 > 0) {
+            position.tokensOwed0 -= amount0;
+            IERC20(token0).transfer(recipient, amount0);
+        }
+        if (amount1 > 0) {
+            position.tokensOwed1 -= amount1;
+            IERC20(token1).transfer(recipient, amount1);
+        }
+    }
 
     // when burning, first call burn then call collect to get the fees owned
     function burn(int24 tickLower, int24 tickUpper, uint128 amount)
