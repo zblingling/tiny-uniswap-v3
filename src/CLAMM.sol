@@ -6,13 +6,17 @@ import "./lib/Tick.sol";
 import "./lib/Position.sol";
 import "./lib/SafeCast.sol";
 import "./lib/TickMath.sol";
+import "./lib/TickBitMap.sol";
 import "./lib/SqrtPriceMath.sol";
+import "./lib/SwapMath.sol";
 
 // ignore Factory, the Pool itself
 contract CLAMM {
     // 成员访问语法，用对象 + 点号(.)调用函数 x.toInt() 而不用 SafeCast.toInt(x)，调用者自动成为库函数第一个参数
     using SafeCast for int256;
+    using SafeCast for uint256;
     using Tick for mapping(int24 => Tick.Info);
+    using TickBitMap for mapping(int16 => uint256);
     using Position for mapping(bytes32 => Position.Info);
     using Position for Position.Info;
 
@@ -34,8 +38,13 @@ contract CLAMM {
         bool unlocked;
     }
     Slot0 public slot0;
+
+    uint256 public feeGrowthGlobal0X128;
+    uint256 public feeGrowthGlobal1X128;
+
     uint128 public liquidity;
     mapping(int24 => Tick.Info) public ticks;
+    mapping(int16 => uint256) public tickBitmap;
     mapping(bytes32 => Position.Info) public positions;
 
     modifier lock() {
@@ -100,8 +109,22 @@ contract CLAMM {
                 maxLiquidityPerTick
             );
             flippedUpper = ticks.update(
-                tickUpper, tick, liquidityDelta, _feeGrowthGlobal0X128, _feeGrowthGlobal1X128, true, maxLiquidityPerTick
+                tickUpper, 
+                tick, 
+                liquidityDelta, 
+                _feeGrowthGlobal0X128, 
+                _feeGrowthGlobal1X128, 
+                true, 
+                maxLiquidityPerTick
             );
+
+            if(flippedLower){
+                tickBitmap.flipTick(tickLower, tickSpacing);
+            }
+            if(flippedUpper){
+                tickBitmap.flipTick(tickUpper, tickSpacing);
+            }
+
         }
 
         position.update(liquidityDelta, 0, 0);
@@ -220,5 +243,175 @@ contract CLAMM {
             (position.tokensOwed0, position.tokensOwed1) =
             (position.tokensOwed0 + uint128(amount0), position.tokensOwed1 + uint128(amount1));
         }
+    }
+
+    struct SwapCache {
+        // liquidity at the beginning of the swap
+        uint128 liquidityStart;
+    }
+
+    // the top level state of the swap, the results of which are recorded in storage at the end
+    struct SwapState {
+        // the amount remaining to be swapped in/out of the input/output asset
+        int256 amountSpecifiedRemaining;
+        // the amount already swapped out/in of the output/input asset
+        int256 amountCalculated;
+        // current sqrt(price)
+        uint160 sqrtPriceX96;
+        // the tick associated with the current price
+        int24 tick;
+        // the global fee growth of the input token
+        uint256 feeGrowthGlobalX128;
+        // the current liquidity in range
+        uint128 liquidity;
+    }
+
+    struct StepComputations {
+        // the price at the beginning of the step
+        uint160 sqrtPriceStartX96;
+        // the next tick to swap to from the current tick in the swap direction
+        int24 tickNext;
+        // whether tickNext is initialized or not
+        bool initialized;
+        // sqrt(price) for the next tick (1/0)
+        uint160 sqrtPriceNextX96;
+        // how much is being swapped in in this step
+        uint256 amountIn;
+        // how much is being swapped out
+        uint256 amountOut;
+        // how much fee is being paid in
+        uint256 feeAmount;
+    }
+
+    event Swap(
+    address indexed sender,
+    address indexed recipient,
+    int256 amount0,
+    int256 amount1,
+    uint160 sqrtPriceX96,
+    uint128 liquidity,
+    int24 tick
+    );
+
+    function swap(
+        address recipient,
+        bool zeroForOne,
+        int256 amountSpecified,
+        uint160 sqrtPriceLimitX96
+    ) external lock returns (int256 amount0, int256 amount1){
+        require(amountSpecified != 0, "AS");
+
+        Slot0 memory slot0Start = slot0;
+
+        require(slot0Start.unlocked, 'LOK');
+        require(
+            zeroForOne
+                ? sqrtPriceLimitX96 < slot0Start.sqrtPriceX96 && sqrtPriceLimitX96 > TickMath.MIN_SQRT_RATIO
+                : sqrtPriceLimitX96 > slot0Start.sqrtPriceX96 && sqrtPriceLimitX96 < TickMath.MAX_SQRT_RATIO,
+            'SPL'
+        );
+
+        slot0.unlocked = false;
+
+        SwapCache memory cache = SwapCache({liquidityStart : liquidity});
+
+        bool exactInput = amountSpecified > 0;
+
+        SwapState memory state = SwapState({
+            amountSpecifiedRemaining: amountSpecified,
+            amountCalculated: 0,
+            sqrtPriceX96: slot0Start.sqrtPriceX96,
+            tick: slot0Start.tick,
+            feeGrowthGlobalX128: zeroForOne
+                ? feeGrowthGlobal0X128
+                : feeGrowthGlobal1X128,
+            liquidity: cache.liquidityStart
+        });
+
+        // TODO : dive into while
+        while(
+            state.amountSpecifiedRemaining != 0 
+            && state.sqrtPriceX96 != sqrtPriceLimitX96){
+            StepComputations memory step;
+
+            step.sqrtPriceStartX96 = state.sqrtPriceX96;
+
+            (step.tickNext, step.initialized) = tickBitmap.nextInitializedTickWithinOneWord(
+                state.tick,
+                tickSpacing,
+                zeroForOne
+            );
+
+            if(step.tickNext < TickMath.MIN_TICK){
+                step.tickNext = TickMath.MIN_TICK;
+            } else if(step.tickNext > TickMath.MAX_TICK){
+                step.tickNext = TickMath.MAX_TICK;
+            }
+
+            step.sqrtPriceNextX96 = TickMath.getSqrtRatioAtTick(step.tickNext);
+
+            (state.sqrtPriceX96, step.amountIn, step.amountOut, step.feeAmount) = SwapMath.computeSwapStep(
+                state.sqrtPriceX96,
+                (zeroForOne ? step.sqrtPriceNextX96 < sqrtPriceLimitX96 : step.sqrtPriceNextX96 > sqrtPriceLimitX96)
+                    ? sqrtPriceLimitX96
+                    : step.sqrtPriceNextX96,
+                state.liquidity,
+                state.amountSpecifiedRemaining,
+                fee
+            );
+
+            if(exactInput) {
+                state.amountSpecifiedRemaining -= 
+                    (step.amountIn + step.feeAmount).toInt256();
+                state.amountCalculated -= step.amountOut.toInt256();
+            } else {
+                state.amountSpecifiedRemaining +=
+                    step.amountOut.toInt256();
+                state.amountCalculated += (step.amountIn + step.feeAmount).toInt256();
+
+            }
+
+            // TODO: update global fee tracker
+
+            // TODO: update tick
+        }
+
+        // update tick if it changed
+        if (state.tick != slot0Start.tick){
+            (slot0.sqrtPriceX96, slot0.tick) = (state.sqrtPriceX96, state.tick);
+        } else {
+            slot0.sqrtPriceX96 = state.sqrtPriceX96;
+        }
+
+        // update liquidity if it changed
+        if (cache.liquidityStart != state.liquidity) liquidity = state.liquidity;
+
+        // update fee growth global
+        if (zeroForOne) {
+            feeGrowthGlobal0X128 = state.feeGrowthGlobalX128;
+        } else {
+            feeGrowthGlobal1X128 = state.feeGrowthGlobalX128;
+        }
+
+        (amount0, amount1) = zeroForOne == exactInput
+            ? (amountSpecified - state.amountSpecifiedRemaining, state.amountCalculated)
+            : (state.amountCalculated, amountSpecified - state.amountSpecifiedRemaining);
+        
+        // do the transfers and collect payment, simplified trasfer processes
+        if (zeroForOne) {
+            if (amount1 < 0) {
+                IERC20(token1).transfer(recipient, uint256(-amount1));
+                IERC20(token0).transferFrom(msg.sender, address(this), uint256(amount0));
+            }
+        } else {
+            if (amount0 < 0){
+                IERC20(token0).transfer(recipient, uint256(-amount0));
+                IERC20(token1).transferFrom(msg.sender, address(this), uint256(amount1));
+            }
+        }
+
+        emit Swap(msg.sender, recipient, amount0, amount1, state.sqrtPriceX96, state.liquidity, state.tick);
+        slot0.unlocked = true;
+
     }
 }
